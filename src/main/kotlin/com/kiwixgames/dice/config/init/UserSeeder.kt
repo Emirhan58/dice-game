@@ -13,12 +13,12 @@ class UserSeeder(
     private val passwordEncoder: PasswordEncoder
 ) : CommandLineRunner {
 
-    override fun run(vararg args: String?) {
+    override fun run(vararg args: String) {
         if (userRepository.count() == 0L) {
             val user = User(
                 username = "admin",
                 email = "admin@dev.com",
-                password = passwordEncoder.encode("1234"),
+                password = passwordEncoder.encode("1234")!!,
                 role = Role.ADMIN
             )
             userRepository.save(user)
