@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:latest
+    ports:
+      - "5433:5432"
+    restart: always
+    container_name: postgres-dice
+    environment:
+      POSTGRES_DB: dice
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: changemeprod!
+
+  # Adminer
+  adminer:
+    image: adminer:latest
+    container_name: adminer-dice
+    restart: always
+    ports:
+      - "8888:8080"
+
+  # Redis
+  redis:
+    image: redis:latest
+    container_name: redis-dice
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # ClamAV
+  #clamav:
+   # image: clamav/clamav:latest
+   # container_name: clamav-dice
+   # ports:
+    #  - "3310:3310"
+   # environment:
+    #  - CLAMD_STARTUP_TIMEOUT=60
+   # restart: unless-stopped
