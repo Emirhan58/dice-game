@@ -8,10 +8,12 @@ import com.kiwixgames.dice.domain.enums.TableStatus
 import com.kiwixgames.dice.domain.enums.WagerLockStatus
 import com.kiwixgames.dice.repositories.TableRepository
 import com.kiwixgames.dice.repositories.WagerLockRepository
+import com.kiwixgames.dice.services.GameService
 import com.kiwixgames.dice.services.TableService
 import com.kiwixgames.dice.services.WalletService
 import com.kiwixgames.dice.services.rules.RulesEngine
 import jakarta.persistence.EntityNotFoundException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -19,7 +21,8 @@ import org.springframework.transaction.annotation.Transactional
 class TableServiceImpl(
     private val tableRepository: TableRepository,
     private val wagerLockRepository: WagerLockRepository,
-    private val walletService: WalletService
+    private val walletService: WalletService,
+    private val gameService: GameService
 ) : TableService {
 
     private val rulesEngine = RulesEngine()
@@ -36,12 +39,10 @@ class TableServiceImpl(
                 badgeTier = rules.badgeTier,
                 stakeGold = rules.stakeGold,
                 targetScore = rules.targetScore,
-                seat0 = owner,
-                seat1 = null
+                seat0 = owner
             )
         )
 
-        // stake lock
         walletService.lockWager(owner, table.id!!, rules.stakeGold)
         wagerLockRepository.save(WagerLock(table = table, user = owner, stakeGold = rules.stakeGold))
 
@@ -61,13 +62,23 @@ class TableServiceImpl(
         if (table.seat1 != null) error("Table already full")
         if (table.seat0?.id == user.id) error("Owner cannot join own table as opponent")
 
-        // stake lock
-        walletService.lockWager(user, table.id!!, table.stakeGold)
-        wagerLockRepository.save(WagerLock(table = table, user = user, stakeGold = table.stakeGold))
+        try {
+            // stake lock
+            walletService.lockWager(user, table.id!!, table.stakeGold)
+            wagerLockRepository.save(WagerLock(table = table, user = user, stakeGold = table.stakeGold))
 
-        table.seat1 = user
-        table.status = TableStatus.FULL
-        return tableRepository.save(table)
+            // update table
+            table.seat1 = user
+            table.status = TableStatus.IN_GAME
+            val saved = tableRepository.save(table)
+
+            // start game
+            gameService.startGame(saved)
+
+            return saved
+        } catch (e: OptimisticLockingFailureException) {
+            throw IllegalStateException("Table was joined by someone else. Please refresh and try again.")
+        }
     }
 
     @Transactional
@@ -81,7 +92,6 @@ class TableServiceImpl(
         table.status = TableStatus.CANCELLED
         tableRepository.save(table)
 
-        // owner lock refund
         val lock = wagerLockRepository.findByTableIdAndUserId(tableId, owner.id!!)
             ?: error("Wager lock not found")
         if (lock.status == WagerLockStatus.LOCKED) {

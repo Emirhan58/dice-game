@@ -37,5 +37,8 @@ class GameTable(
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "seat1_user_id", nullable = true)
-    var seat1: User? = null
+    var seat1: User? = null,
+
+    @Version
+    var version: Long? = null
 ) : BaseEntity()
