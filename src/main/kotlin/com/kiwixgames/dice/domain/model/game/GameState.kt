@@ -12,7 +12,8 @@ data class GameState(
 
     val remainingSlots: IntArray = intArrayOf(0,1,2,3,4,5), // dice slots
     val lastRoll: List<RolledDie>? = null,
-    val phase: TurnPhase = TurnPhase.MUST_ROLL
+    val phase: TurnPhase = TurnPhase.MUST_ROLL,
+    val lastActionAtEpochMs: Long = System.currentTimeMillis()
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

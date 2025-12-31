@@ -4,7 +4,7 @@ import com.kiwixgames.dice.domain.dtos.table.TableResponse
 import com.kiwixgames.dice.domain.entities.GameTable
 
 object TableMapper {
-    fun toDto(gameTable: GameTable): TableResponse {
+    fun toDto(gameTable: GameTable, gameId: Long?): TableResponse {
         return TableResponse(
             id = gameTable.id!!,
             status = gameTable.status.name,
@@ -13,7 +13,8 @@ object TableMapper {
             stakeGold = gameTable.stakeGold,
             targetScore = gameTable.targetScore,
             seat0UserId = gameTable.seat0?.id,
-            seat1UserId = gameTable.seat1?.id
+            seat1UserId = gameTable.seat1?.id,
+            gameId = gameId
         )
     }
 }

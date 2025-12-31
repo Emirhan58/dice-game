@@ -1,6 +1,7 @@
 package com.kiwixgames.dice.services.impl
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.kiwixgames.dice.domain.dtos.game.GameEvent
 import com.kiwixgames.dice.domain.entities.Game
 import com.kiwixgames.dice.domain.entities.User
 import com.kiwixgames.dice.domain.enums.GameStatus
@@ -11,9 +12,10 @@ import com.kiwixgames.dice.domain.model.game.GameState
 import com.kiwixgames.dice.domain.model.game.RolledDie
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.repositories.TableRepository
+import com.kiwixgames.dice.repositories.WagerLockRepository
+import com.kiwixgames.dice.services.GameEventPublisher
 import com.kiwixgames.dice.services.GamePlayService
 import com.kiwixgames.dice.services.WalletService
-import com.kiwixgames.dice.repositories.WagerLockRepository
 import com.kiwixgames.dice.services.game.Kcd2ScoringMax
 import jakarta.persistence.EntityNotFoundException
 import org.springframework.dao.OptimisticLockingFailureException
@@ -28,48 +30,90 @@ class GamePlayServiceImpl(
     private val tableRepository: TableRepository,
     private val wagerLockRepository: WagerLockRepository,
     private val walletService: WalletService,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val publisher: GameEventPublisher
 ) : GamePlayService {
 
     private val rng = SecureRandom()
 
     override fun getState(gameId: Long, me: User): GameState {
-        val game = gameRepository.findById(gameId).orElseThrow { EntityNotFoundException("Game not found: $gameId") }
+        val game = gameRepository.findById(gameId).orElseThrow {
+            EntityNotFoundException("Game not found: $gameId")
+        }
         requirePlayer(game, me)
         return readState(game)
     }
 
     @Transactional
     override fun roll(gameId: Long, me: User): GameState {
-        val game = gameRepository.findById(gameId).orElseThrow { EntityNotFoundException("Game not found: $gameId") }
+        val game = gameRepository.findById(gameId).orElseThrow {
+            EntityNotFoundException("Game not found: $gameId")
+        }
         val seat = requirePlayer(game, me)
         val state = readState(game)
 
         ensureInProgress(state)
         ensureActiveSeat(state, seat)
-        if (state.phase == TurnPhase.MUST_KEEP_OR_BUST) error("You must keep at least one scoring die before rolling again")
+
+        if (state.phase == TurnPhase.MUST_KEEP_OR_BUST) {
+            error("You must keep at least one scoring die before rolling again")
+        }
 
         val remaining = state.remainingSlots
         if (remaining.isEmpty()) error("No dice remaining to roll")
 
         val roll = remaining.map { slot -> RolledDie(slot = slot, value = rollDie()) }
 
-        // Bust check: any score possible from this roll?
-        val values = roll.map { it.value }
-        val possible = Kcd2ScoringMax.scoreMax(values) > 0
-        if (!possible) {
-            // BUST: turnScore = 0, switch turn
-            val next = switchTurn(state.copy(lastRoll = roll, phase = TurnPhase.MUST_KEEP_OR_BUST), bust = true)
-            return saveState(game, next)
-        }
+        val possible = Kcd2ScoringMax.scoreMax(roll.map { it.value }) > 0
 
-        val next = state.copy(lastRoll = roll, phase = TurnPhase.MUST_KEEP_OR_BUST)
-        return saveState(game, next)
+        return if (!possible) {
+            // BUST: turnScore=0, switch turn immediately
+            val busted = state.copy(
+                lastRoll = roll,
+                phase = TurnPhase.MUST_KEEP_OR_BUST,
+                lastActionAtEpochMs = now()
+            )
+            val next = switchTurn(busted, bust = true).copy(lastActionAtEpochMs = now())
+
+            publisher.publish(gameId, GameEvent(
+                type = "BUST",
+                gameId = gameId,
+                tableId = game.table.id!!,
+                bySeat = seat,
+                payload = mapOf("rolled" to roll)
+            ))
+            publisher.publish(gameId, GameEvent(
+                type = "TURN_CHANGED",
+                gameId = gameId,
+                tableId = game.table.id!!,
+                bySeat = next.activeSeat
+            ))
+
+            saveState(game, next)
+        } else {
+            val next = state.copy(
+                lastRoll = roll,
+                phase = TurnPhase.MUST_KEEP_OR_BUST,
+                lastActionAtEpochMs = now()
+            )
+
+            publisher.publish(gameId, GameEvent(
+                type = "ROLLED",
+                gameId = gameId,
+                tableId = game.table.id!!,
+                bySeat = seat,
+                payload = mapOf("roll" to roll)
+            ))
+
+            saveState(game, next)
+        }
     }
 
     @Transactional
     override fun keep(gameId: Long, me: User, slots: List<Int>): GameState {
-        val game = gameRepository.findById(gameId).orElseThrow { EntityNotFoundException("Game not found: $gameId") }
+        val game = gameRepository.findById(gameId).orElseThrow {
+            EntityNotFoundException("Game not found: $gameId")
+        }
         val seat = requirePlayer(game, me)
         val state = readState(game)
 
@@ -83,7 +127,6 @@ class GamePlayServiceImpl(
         val rolledBySlot = lastRoll.associateBy { it.slot }
         val remainingSet = state.remainingSlots.toSet()
 
-        // validate slots are from current roll & remaining
         slots.forEach { s ->
             if (!remainingSet.contains(s)) error("Slot $s is not in remaining dice")
             if (!rolledBySlot.containsKey(s)) error("Slot $s was not rolled")
@@ -93,21 +136,31 @@ class GamePlayServiceImpl(
         val gained = Kcd2ScoringMax.scoreMax(keptValues)
         if (gained <= 0) error("Selected dice do not form a valid scoring combination")
 
-        // remove kept slots from remaining
         val newRemaining = state.remainingSlots.filter { it !in slots }.toIntArray()
-
         val newTurnScore = state.turnScore + gained
 
-        // HOT DICE: if no dice left, reset to 6
         val hot = newRemaining.isEmpty()
         val afterKeep = state.copy(
             turnScore = newTurnScore,
-            remainingSlots = if (hot) intArrayOf(0,1,2,3,4,5) else newRemaining,
+            remainingSlots = if (hot) intArrayOf(0, 1, 2, 3, 4, 5) else newRemaining,
             lastRoll = null,
-            phase = TurnPhase.CAN_ROLL_OR_BANK
+            phase = TurnPhase.CAN_ROLL_OR_BANK,
+            lastActionAtEpochMs = now()
         )
 
-        // immediate win rule (your requirement)
+        publisher.publish(gameId, GameEvent(
+            type = "KEPT",
+            gameId = gameId,
+            tableId = game.table.id!!,
+            bySeat = seat,
+            payload = mapOf(
+                "slots" to slots,
+                "gained" to gained,
+                "turnScore" to afterKeep.turnScore,
+                "hotDice" to hot
+            )
+        ))
+
         val maybeFinished = finishIfReachedTarget(game, afterKeep)
 
         return saveState(game, maybeFinished)
@@ -115,7 +168,9 @@ class GamePlayServiceImpl(
 
     @Transactional
     override fun bank(gameId: Long, me: User): GameState {
-        val game = gameRepository.findById(gameId).orElseThrow { EntityNotFoundException("Game not found: $gameId") }
+        val game = gameRepository.findById(gameId).orElseThrow {
+            EntityNotFoundException("Game not found: $gameId")
+        }
         val seat = requirePlayer(game, me)
         val state = readState(game)
 
@@ -123,38 +178,60 @@ class GamePlayServiceImpl(
         ensureActiveSeat(state, seat)
 
         if (state.turnScore <= 0) error("Nothing to bank")
-        if (state.phase == TurnPhase.MUST_KEEP_OR_BUST) error("You must keep or bust before banking (you have an unresolved roll)")
+        if (state.phase == TurnPhase.MUST_KEEP_OR_BUST) {
+            error("You must keep or bust before banking (you have an unresolved roll)")
+        }
 
         val totals = state.totalScores.copyOf()
         totals[seat] += state.turnScore
 
-        // win check on bank as well (still consistent)
+        publisher.publish(gameId, GameEvent(
+            type = "BANKED",
+            gameId = gameId,
+            tableId = game.table.id!!,
+            bySeat = seat,
+            payload = mapOf("banked" to state.turnScore, "total" to totals[seat])
+        ))
+
         if (totals[seat] >= state.targetScore) {
             val finished = state.copy(
                 totalScores = totals,
                 turnScore = 0,
-                phase = TurnPhase.MUST_ROLL
+                phase = TurnPhase.MUST_ROLL,
+                lastRoll = null,
+                lastActionAtEpochMs = now()
             )
             val final = finalizeGame(game, finished, winnerSeat = seat)
             return saveState(game, final)
         }
 
+
         val next = switchTurn(
             state.copy(
                 totalScores = totals,
                 turnScore = 0,
-                remainingSlots = intArrayOf(0,1,2,3,4,5),
+                remainingSlots = intArrayOf(0, 1, 2, 3, 4, 5),
                 lastRoll = null,
-                phase = TurnPhase.MUST_ROLL
+                phase = TurnPhase.MUST_ROLL,
+                lastActionAtEpochMs = now()
             ),
             bust = false
-        )
+        ).copy(lastActionAtEpochMs = now())
+
+        publisher.publish(gameId, GameEvent(
+            type = "TURN_CHANGED",
+            gameId = gameId,
+            tableId = game.table.id!!,
+            bySeat = next.activeSeat
+        ))
+
         return saveState(game, next)
     }
 
     // ---------------- helpers ----------------
 
     private fun rollDie(): Int = rng.nextInt(6) + 1
+    private fun now(): Long = System.currentTimeMillis()
 
     private fun ensureInProgress(state: GameState) {
         if (state.status != GameStatus.IN_PROGRESS) error("Game is not in progress")
@@ -179,16 +256,16 @@ class GamePlayServiceImpl(
     private fun readState(game: Game): GameState {
         val json = game.stateJson
         return if (json.isNullOrBlank()) {
-            // default initial state
             GameState(
                 status = GameStatus.IN_PROGRESS,
                 targetScore = game.targetScore,
                 activeSeat = 0,
                 totalScores = intArrayOf(0, 0),
                 turnScore = 0,
-                remainingSlots = intArrayOf(0,1,2,3,4,5),
+                remainingSlots = intArrayOf(0, 1, 2, 3, 4, 5),
                 lastRoll = null,
-                phase = TurnPhase.MUST_ROLL
+                phase = TurnPhase.MUST_ROLL,
+                lastActionAtEpochMs = now()
             )
         } else {
             objectMapper.readValue(json, GameState::class.java)
@@ -196,10 +273,8 @@ class GamePlayServiceImpl(
     }
 
     private fun saveState(game: Game, state: GameState): GameState {
-        // persist state + metadata
         game.stateJson = objectMapper.writeValueAsString(state)
 
-        // also keep status info at entity level if finished
         if (state.status == GameStatus.FINISHED) {
             game.status = GameStatus.FINISHED
             if (game.finishedAt == null) game.finishedAt = LocalDateTime.now()
@@ -214,12 +289,11 @@ class GamePlayServiceImpl(
     }
 
     private fun switchTurn(state: GameState, bust: Boolean): GameState {
-        // bust -> turnScore reset & switch
         val nextSeat = 1 - state.activeSeat
         return state.copy(
             activeSeat = nextSeat,
-            turnScore = if (bust) 0 else state.turnScore,
-            remainingSlots = intArrayOf(0,1,2,3,4,5),
+            turnScore = 0,
+            remainingSlots = intArrayOf(0, 1, 2, 3, 4, 5),
             lastRoll = null,
             phase = TurnPhase.MUST_ROLL
         )
@@ -228,6 +302,7 @@ class GamePlayServiceImpl(
     private fun finishIfReachedTarget(game: Game, state: GameState): GameState {
         val seat = state.activeSeat
         val currentTotal = state.totalScores[seat]
+
         if (currentTotal + state.turnScore >= state.targetScore) {
             val totals = state.totalScores.copyOf()
             totals[seat] = currentTotal + state.turnScore
@@ -237,7 +312,8 @@ class GamePlayServiceImpl(
                 turnScore = 0,
                 status = GameStatus.FINISHED,
                 phase = TurnPhase.MUST_ROLL,
-                lastRoll = null
+                lastRoll = null,
+                lastActionAtEpochMs = now()
             )
             return finalizeGame(game, finished, winnerSeat = seat)
         }
@@ -245,7 +321,6 @@ class GamePlayServiceImpl(
     }
 
     private fun finalizeGame(game: Game, state: GameState, winnerSeat: Int): GameState {
-        // mark game/table
         game.winnerSeat = winnerSeat
         game.finishedAt = LocalDateTime.now()
         game.status = GameStatus.FINISHED
@@ -254,8 +329,15 @@ class GamePlayServiceImpl(
         table.status = TableStatus.FINISHED
         tableRepository.save(table)
 
-        // payout (idempotent)
         payoutOnce(table.id!!, winnerSeat)
+
+        publisher.publish(game.id!!, GameEvent(
+            type = "FINISHED",
+            gameId = game.id!!,
+            tableId = table.id!!,
+            bySeat = winnerSeat,
+            payload = mapOf("winnerSeat" to winnerSeat)
+        ))
 
         return state.copy(status = GameStatus.FINISHED)
     }
@@ -264,20 +346,18 @@ class GamePlayServiceImpl(
         val locks = wagerLockRepository.findAllByTableId(tableId)
         if (locks.isEmpty()) return
 
-        // if already paid out, skip
-        if (locks.all { it.status == WagerLockStatus.PAID_OUT }) return
+        val anyLocked = locks.any { it.status == WagerLockStatus.LOCKED }
+        if (!anyLocked) return
 
-        val table = tableRepository.findById(tableId).orElseThrow { EntityNotFoundException("Table not found: $tableId") }
+        val table = tableRepository.findById(tableId).orElseThrow {
+            EntityNotFoundException("Table not found: $tableId")
+        }
         val winnerUser = if (winnerSeat == 0) table.seat0 else table.seat1
         val winner = winnerUser ?: error("Winner user is null")
 
-        val stake = table.stakeGold
-        val payout = stake * 2
+        val payout = table.stakeGold * 2
 
-        // mark locks
-        locks.forEach {
-            if (it.status == WagerLockStatus.LOCKED) it.status = WagerLockStatus.PAID_OUT
-        }
+        locks.forEach { if (it.status == WagerLockStatus.LOCKED) it.status = WagerLockStatus.PAID_OUT }
         wagerLockRepository.saveAll(locks)
 
         walletService.payoutWinner(winner, tableId, payout)

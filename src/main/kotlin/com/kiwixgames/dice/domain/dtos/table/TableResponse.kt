@@ -8,5 +8,6 @@ data class TableResponse(
     val stakeGold: Int,
     val targetScore: Int,
     val seat0UserId: Long?,
-    val seat1UserId: Long?
+    val seat1UserId: Long?,
+    val gameId: Long?
 )
