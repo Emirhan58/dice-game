@@ -21,6 +21,7 @@ class WagerLock(
     @Column(nullable = false)
     var stakeGold: Int,
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     var status: WagerLockStatus = WagerLockStatus.LOCKED
 ) : BaseEntity()

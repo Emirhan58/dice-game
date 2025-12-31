@@ -24,7 +24,7 @@ class GameTimeoutJob(
     private val publisher: GameEventPublisher,
     private val objectMapper: ObjectMapper
 ) {
-    private val timeoutMs = 60_000L
+    private val timeoutMs = 6000_000L
 
     @Scheduled(fixedDelay = 5_000L)
     @Transactional
