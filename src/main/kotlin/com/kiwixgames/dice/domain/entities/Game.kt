@@ -26,5 +26,8 @@ class Game(
     var finishedAt: LocalDateTime? = null,
 
     @Column(name = "state_json", columnDefinition = "TEXT")
-    var stateJson: String? = null
+    var stateJson: String? = null,
+
+    @Version
+    var version: Long? = null
 ) : BaseEntity()

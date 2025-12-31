@@ -1,7 +1,9 @@
 package com.kiwixgames.dice.services.impl
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.kiwixgames.dice.domain.entities.Game
 import com.kiwixgames.dice.domain.entities.GameTable
+import com.kiwixgames.dice.domain.model.game.GameState
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.services.GameService
 import org.springframework.stereotype.Service
@@ -9,7 +11,8 @@ import org.springframework.transaction.annotation.Transactional
 
 @Service
 class GameServiceImpl(
-    private val gameRepository: GameRepository
+    private val gameRepository: GameRepository,
+    private val objectMapper: ObjectMapper
 ) : GameService {
 
     @Transactional
@@ -17,10 +20,13 @@ class GameServiceImpl(
         val existing = gameRepository.findByTableId(table.id!!)
         if (existing != null) return existing
 
+        val initial = GameState(targetScore = table.targetScore)
+
         return gameRepository.save(
             Game(
                 table = table,
-                targetScore = table.targetScore
+                targetScore = table.targetScore,
+                stateJson = objectMapper.writeValueAsString(initial)
             )
         )
     }
