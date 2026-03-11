@@ -20,6 +20,8 @@ import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
 import java.util.*
 import javax.crypto.SecretKey
+import org.springframework.http.HttpStatus
+import org.springframework.web.server.ResponseStatusException
 
 @Service
 class AuthenticationServiceImpl(
@@ -126,6 +128,8 @@ class AuthenticationServiceImpl(
         return parseClaims(token).subject
     }
 
+
+
     private fun parseClaims(token: String) = try {
         Jwts.parser()
             .verifyWith(getSigningKey())
@@ -133,7 +137,10 @@ class AuthenticationServiceImpl(
             .parseSignedClaims(token)
             .payload
     } catch (ex: Exception) {
-        throw IllegalArgumentException("Failed to parse JWT: ${ex.message}")
+        throw ResponseStatusException(
+            HttpStatus.UNAUTHORIZED,
+            "Failed to parse JWT: ${ex.message}"
+        )
     }
 
     private fun getSigningKey(): SecretKey {
