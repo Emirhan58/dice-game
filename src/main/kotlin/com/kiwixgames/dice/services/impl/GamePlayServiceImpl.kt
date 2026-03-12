@@ -33,6 +33,7 @@ class GamePlayServiceImpl(
 
     private val rng = SecureRandom()
 
+    @Transactional(readOnly = true)
     override fun getState(gameId: Long, me: User): GameState {
         val game = gameRepository.findById(gameId).orElseThrow {
             EntityNotFoundException("Game not found: $gameId")

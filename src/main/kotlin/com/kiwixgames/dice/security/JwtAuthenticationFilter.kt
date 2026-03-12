@@ -23,6 +23,7 @@ class JwtAuthenticationFilter(
 ) : OncePerRequestFilter() {
 
     private val log = LoggerFactory.getLogger(JwtAuthenticationFilter::class.java)
+    private val errorObjectMapper = ObjectMapper()
 
     override fun shouldNotFilter(request: HttpServletRequest): Boolean {
         val path = request.requestURI
@@ -109,9 +110,8 @@ class JwtAuthenticationFilter(
             errors = null
         )
 
-        val objectMapper = ObjectMapper()
         val writer = response.writer
-        writer.write(objectMapper.writeValueAsString(errorResponse))
+        writer.write(errorObjectMapper.writeValueAsString(errorResponse))
         writer.flush()
     }
 

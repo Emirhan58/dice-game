@@ -55,6 +55,7 @@ class TableServiceImpl(
         return table
     }
 
+    @Transactional(readOnly = true)
     override fun listWaiting(): List<GameTable> =
         tableRepository.findAllByStatus(TableStatus.WAITING)
 
