@@ -3,18 +3,24 @@ package com.kiwixgames.dice.services.impl
 import com.kiwixgames.dice.domain.entities.User
 import com.kiwixgames.dice.domain.entities.Wallet
 import com.kiwixgames.dice.domain.entities.WalletTxn
+import com.kiwixgames.dice.domain.enums.WagerLockStatus
 import com.kiwixgames.dice.domain.enums.WalletTxnType
+import com.kiwixgames.dice.repositories.TableRepository
+import com.kiwixgames.dice.repositories.WagerLockRepository
 import com.kiwixgames.dice.repositories.WalletRepository
 import com.kiwixgames.dice.repositories.WalletTxnRepository
 import com.kiwixgames.dice.services.WalletService
 import jakarta.persistence.EntityNotFoundException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 @Service
 class WalletServiceImpl(
     private val walletRepository: WalletRepository,
-    private val walletTxnRepository: WalletTxnRepository
+    private val walletTxnRepository: WalletTxnRepository,
+    private val wagerLockRepository: WagerLockRepository,
+    private val tableRepository: TableRepository
 ) : WalletService {
 
     @Transactional
@@ -41,7 +47,11 @@ class WalletServiceImpl(
         }
 
         wallet.balanceGold -= stake
-        walletRepository.save(wallet)
+        try {
+            walletRepository.save(wallet)
+        } catch (e: OptimisticLockingFailureException) {
+            throw IllegalStateException("Wallet was modified concurrently. Please try again.")
+        }
 
         walletTxnRepository.save(
             WalletTxn(
@@ -95,5 +105,25 @@ class WalletServiceImpl(
                 note = "Payout for table $tableId"
             )
         )
+    }
+
+    @Transactional
+    override fun payoutOnce(tableId: Long, winnerSeat: Int) {
+        val locks = wagerLockRepository.findAllByTableId(tableId)
+        if (locks.isEmpty()) return
+        if (locks.none { it.status == WagerLockStatus.LOCKED }) return
+
+        val table = tableRepository.findById(tableId).orElseThrow {
+            EntityNotFoundException("Table not found: $tableId")
+        }
+        val winner = (if (winnerSeat == 0) table.seat0 else table.seat1)
+            ?: error("Winner user is null for seat $winnerSeat")
+
+        val payout = table.stakeGold * 2
+
+        locks.forEach { if (it.status == WagerLockStatus.LOCKED) it.status = WagerLockStatus.PAID_OUT }
+        wagerLockRepository.saveAll(locks)
+
+        payoutWinner(winner, tableId, payout)
     }
 }

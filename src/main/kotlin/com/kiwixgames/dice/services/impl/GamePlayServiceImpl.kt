@@ -7,12 +7,10 @@ import com.kiwixgames.dice.domain.entities.User
 import com.kiwixgames.dice.domain.enums.GameStatus
 import com.kiwixgames.dice.domain.enums.TableStatus
 import com.kiwixgames.dice.domain.enums.TurnPhase
-import com.kiwixgames.dice.domain.enums.WagerLockStatus
 import com.kiwixgames.dice.domain.model.game.GameState
 import com.kiwixgames.dice.domain.model.game.RolledDie
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.repositories.TableRepository
-import com.kiwixgames.dice.repositories.WagerLockRepository
 import com.kiwixgames.dice.services.GameEventPublisher
 import com.kiwixgames.dice.services.GamePlayService
 import com.kiwixgames.dice.services.WalletService
@@ -28,7 +26,6 @@ import java.time.LocalDateTime
 class GamePlayServiceImpl(
     private val gameRepository: GameRepository,
     private val tableRepository: TableRepository,
-    private val wagerLockRepository: WagerLockRepository,
     private val walletService: WalletService,
     private val objectMapper: ObjectMapper,
     private val publisher: GameEventPublisher
@@ -306,7 +303,7 @@ class GamePlayServiceImpl(
         table.status = TableStatus.FINISHED
         tableRepository.save(table)
 
-        payoutOnce(table.id!!, winnerSeat)
+        walletService.payoutOnce(table.id!!, winnerSeat)
 
         publisher.publish(game.id!!, GameEvent(
             type = "FINISHED",
@@ -317,26 +314,5 @@ class GamePlayServiceImpl(
         ))
 
         return state.copy(status = GameStatus.FINISHED)
-    }
-
-    private fun payoutOnce(tableId: Long, winnerSeat: Int) {
-        val locks = wagerLockRepository.findAllByTableId(tableId)
-        if (locks.isEmpty()) return
-
-        val anyLocked = locks.any { it.status == WagerLockStatus.LOCKED }
-        if (!anyLocked) return
-
-        val table = tableRepository.findById(tableId).orElseThrow {
-            EntityNotFoundException("Table not found: $tableId")
-        }
-        val winnerUser = if (winnerSeat == 0) table.seat0 else table.seat1
-        val winner = winnerUser ?: error("Winner user is null")
-
-        val payout = table.stakeGold * 2
-
-        locks.forEach { if (it.status == WagerLockStatus.LOCKED) it.status = WagerLockStatus.PAID_OUT }
-        wagerLockRepository.saveAll(locks)
-
-        walletService.payoutWinner(winner, tableId, payout)
     }
 }

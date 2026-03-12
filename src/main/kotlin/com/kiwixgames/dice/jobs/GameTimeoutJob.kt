@@ -6,9 +6,7 @@ import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.services.GameEventPublisher
 import com.kiwixgames.dice.services.WalletService
 import com.kiwixgames.dice.repositories.TableRepository
-import com.kiwixgames.dice.repositories.WagerLockRepository
 import com.kiwixgames.dice.domain.dtos.game.GameEvent
-import com.kiwixgames.dice.domain.enums.WagerLockStatus
 import com.kiwixgames.dice.domain.model.game.GameState
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
@@ -19,7 +17,6 @@ import java.time.LocalDateTime
 class GameTimeoutJob(
     private val gameRepository: GameRepository,
     private val tableRepository: TableRepository,
-    private val wagerLockRepository: WagerLockRepository,
     private val walletService: WalletService,
     private val publisher: GameEventPublisher,
     private val objectMapper: ObjectMapper
@@ -59,7 +56,7 @@ class GameTimeoutJob(
             table.status = com.kiwixgames.dice.domain.enums.TableStatus.FINISHED
             tableRepository.save(table)
 
-            payoutOnce(table.id!!, winnerSeat)
+            walletService.payoutOnce(table.id!!, winnerSeat)
 
             publisher.publish(g.id!!, GameEvent(
                 type = "FORFEIT",
@@ -69,20 +66,5 @@ class GameTimeoutJob(
                 payload = mapOf("winnerSeat" to winnerSeat, "reason" to "TIMEOUT")
             ))
         }
-    }
-
-    private fun payoutOnce(tableId: Long, winnerSeat: Int) {
-        val locks = wagerLockRepository.findAllByTableId(tableId)
-        if (locks.isEmpty()) return
-        if (locks.all { it.status == WagerLockStatus.PAID_OUT }) return
-
-        val table = tableRepository.findById(tableId).orElseThrow()
-        val winner = if (winnerSeat == 0) table.seat0!! else table.seat1!!
-        val payout = table.stakeGold * 2
-
-        locks.forEach { if (it.status == WagerLockStatus.LOCKED) it.status = WagerLockStatus.PAID_OUT }
-        wagerLockRepository.saveAll(locks)
-
-        walletService.payoutWinner(winner, tableId, payout)
     }
 }

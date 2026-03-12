@@ -27,9 +27,15 @@ class TableServiceImpl(
 
     private val rulesEngine = RulesEngine()
 
+    private val activeStatuses = listOf(TableStatus.WAITING, TableStatus.IN_GAME)
+
     @Transactional
     override fun createTable(owner: User, req: CreateTableRequest): GameTable {
         val rules = rulesEngine.resolve(req.mode, req.badgeTier, req.stakeGold)
+
+        if (hasActiveTable(owner.id!!)) {
+            error("You already have an active table or game. Finish or cancel it first.")
+        }
 
         val table = tableRepository.save(
             GameTable(
@@ -61,6 +67,9 @@ class TableServiceImpl(
         if (table.status != TableStatus.WAITING) error("Table is not joinable")
         if (table.seat1 != null) error("Table already full")
         if (table.seat0?.id == user.id) error("Owner cannot join own table as opponent")
+        if (hasActiveTable(user.id!!)) {
+            error("You already have an active table or game. Finish or cancel it first.")
+        }
 
         try {
             // stake lock
@@ -100,5 +109,10 @@ class TableServiceImpl(
             wagerLockRepository.save(lock)
         }
         return table
+    }
+
+    private fun hasActiveTable(userId: Long): Boolean {
+        return tableRepository.existsByOwnerIdAndStatusIn(userId, activeStatuses)
+                || tableRepository.existsBySeat1IdAndStatusIn(userId, activeStatuses)
     }
 }

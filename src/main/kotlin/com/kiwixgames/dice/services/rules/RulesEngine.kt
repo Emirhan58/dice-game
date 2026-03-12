@@ -17,6 +17,9 @@ class RulesEngine {
             }
             TableMode.BADGED -> {
                 val tier = badgeTier ?: throw IllegalArgumentException("badgeTier is required for BADGED tables")
+                if (stakeGold < 10 || stakeGold > 500) {
+                    throw IllegalArgumentException("BADGED stake must be between 10 and 500 (given: $stakeGold)")
+                }
                 val target = when (tier) {
                     BadgeTier.TIN -> 4000
                     BadgeTier.SILVER -> 5000
