@@ -55,6 +55,11 @@ class JwtAuthenticationFilter(
 
             val userDetails: UserDetails = authenticationService.validateTokenByType(token, TokenType.ACCESS)
 
+            if (!userDetails.isEnabled) {
+                sendJsonErrorResponse(response, HttpStatus.UNAUTHORIZED, "Account is deactivated")
+                return
+            }
+
             val authentication = UsernamePasswordAuthenticationToken(
                 userDetails,
                 null,
