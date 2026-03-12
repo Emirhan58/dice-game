@@ -46,26 +46,34 @@ class AuthenticationServiceImpl(
     }
 
     override fun generateAccessToken(userDetails: UserDetails): String {
-        return generateToken(userDetails.username, accessTokenExpiryMs, TokenType.ACCESS)
+        val role = extractRole(userDetails)
+        return generateToken(userDetails.username, accessTokenExpiryMs, TokenType.ACCESS, role)
     }
 
     override fun generateRefreshToken(userDetails: UserDetails): String {
-        return generateToken(userDetails.username, refreshTokenExpiryMs, TokenType.REFRESH)
+        val role = extractRole(userDetails)
+        return generateToken(userDetails.username, refreshTokenExpiryMs, TokenType.REFRESH, role)
     }
 
     override fun generateResetPasswordToken(email: String): String {
-        return generateToken(email, resetPasswordTokenExpiryMs, TokenType.RESET)
+        return generateToken(email, resetPasswordTokenExpiryMs, TokenType.RESET, null)
     }
 
-    private fun generateToken(subject: String, expiry: Long, tokenType: TokenType): String {
+    private fun generateToken(subject: String, expiry: Long, tokenType: TokenType, role: String?): String {
         val now = System.currentTimeMillis()
-        return Jwts.builder()
+        val builder = Jwts.builder()
             .subject(subject)
             .issuedAt(Date(now))
             .expiration(Date(now + expiry))
             .claim("token_type", tokenType.toString())
-            .signWith(getSigningKey())
-            .compact()
+        if (role != null) {
+            builder.claim("role", role)
+        }
+        return builder.signWith(getSigningKey()).compact()
+    }
+
+    private fun extractRole(userDetails: UserDetails): String {
+        return (userDetails as? BlogUserDetails)?.user?.role?.name ?: "USER"
     }
 
     override fun validateTokenByType(token: String, expectedType: TokenType): UserDetails {
