@@ -1,6 +1,16 @@
 package com.kiwixgames.dice.services.game
 
+/**
+ * Farkle scoring engine.
+ *
+ * Uses DFS + memoization to find the combination of [ScoringRule]s
+ * that maximizes the total score for a given set of dice.
+ *
+ * Rules are pluggable — see [FarkleScoringRules] to add or remove rules.
+ */
 object Kcd2ScoringMax {
+
+    private val rules: List<ScoringRule> = FarkleScoringRules.defaultRules
 
     fun scoreMax(values: List<Int>): Int {
         if (values.isEmpty()) return 0
@@ -13,49 +23,14 @@ object Kcd2ScoringMax {
     private fun key(c: IntArray): String =
         "${c[1]}-${c[2]}-${c[3]}-${c[4]}-${c[5]}-${c[6]}"
 
-    private fun dfs(c: IntArray, memo: MutableMap<String, Int>): Int {
-        val k = key(c)
+    private fun dfs(counts: IntArray, memo: MutableMap<String, Int>): Int {
+        val k = key(counts)
         memo[k]?.let { return it }
 
         var best = 0
-
-        // --- Singles ---
-        if (c[1] > 0) {
-            c[1]--
-            best = maxOf(best, 100 + dfs(c, memo))
-            c[1]++
-        }
-        if (c[5] > 0) {
-            c[5]--
-            best = maxOf(best, 50 + dfs(c, memo))
-            c[5]++
-        }
-
-        // --- Straights ---
-        fun takeStraight(range: IntRange, points: Int) {
-            if (range.all { c[it] > 0 }) {
-                range.forEach { c[it]-- }
-                best = maxOf(best, points + dfs(c, memo))
-                range.forEach { c[it]++ }
-            }
-        }
-        takeStraight(1..5, 500)
-        takeStraight(2..6, 750)
-        takeStraight(1..6, 1500)
-
-        // --- N-of-a-kind (3+) with doubling ---
-        for (v in 1..6) {
-            val cnt = c[v]
-            if (cnt >= 3) {
-                val base = if (v == 1) 1000 else v * 100
-
-                // k = 3..min(6,cnt)
-                for (kCount in 3..minOf(6, cnt)) {
-                    val multiplier = 1 shl (kCount - 3)  // 3->1x, 4->2x, 5->4x, 6->8x
-                    repeat(kCount) { c[v]-- }
-                    best = maxOf(best, base * multiplier + dfs(c, memo))
-                    repeat(kCount) { c[v]++ }
-                }
+        for (rule in rules) {
+            for (match in rule.matches(counts)) {
+                best = maxOf(best, match.points + dfs(match.consumed, memo))
             }
         }
 
