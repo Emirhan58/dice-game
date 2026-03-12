@@ -23,7 +23,7 @@ class BlogUserDetails(
 
     override fun isCredentialsNonExpired(): Boolean = true
 
-    override fun isEnabled(): Boolean = true
+    override fun isEnabled(): Boolean = user.isActive
 
     fun getId(): Long? = user.id
 }
