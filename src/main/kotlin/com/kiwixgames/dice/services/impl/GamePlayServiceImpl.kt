@@ -161,9 +161,7 @@ class GamePlayServiceImpl(
             )
         ))
 
-        val maybeFinished = finishIfReachedTarget(game, afterKeep)
-
-        return saveState(game, maybeFinished)
+        return saveState(game, afterKeep)
     }
 
     @Transactional
@@ -297,27 +295,6 @@ class GamePlayServiceImpl(
             lastRoll = null,
             phase = TurnPhase.MUST_ROLL
         )
-    }
-
-    private fun finishIfReachedTarget(game: Game, state: GameState): GameState {
-        val seat = state.activeSeat
-        val currentTotal = state.totalScores[seat]
-
-        if (currentTotal + state.turnScore >= state.targetScore) {
-            val totals = state.totalScores.copyOf()
-            totals[seat] = currentTotal + state.turnScore
-
-            val finished = state.copy(
-                totalScores = totals,
-                turnScore = 0,
-                status = GameStatus.FINISHED,
-                phase = TurnPhase.MUST_ROLL,
-                lastRoll = null,
-                lastActionAtEpochMs = now()
-            )
-            return finalizeGame(game, finished, winnerSeat = seat)
-        }
-        return state
     }
 
     private fun finalizeGame(game: Game, state: GameState, winnerSeat: Int): GameState {

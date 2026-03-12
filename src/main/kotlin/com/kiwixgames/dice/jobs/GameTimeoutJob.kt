@@ -29,11 +29,10 @@ class GameTimeoutJob(
     @Scheduled(fixedDelay = 5_000L)
     @Transactional
     fun checkTimeouts() {
-        val games = gameRepository.findAll() // "IN_PROGRESS"
+        val games = gameRepository.findAllByStatus(GameStatus.IN_PROGRESS)
         val now = System.currentTimeMillis()
 
         for (g in games) {
-            if (g.status != GameStatus.IN_PROGRESS) continue
             val json = g.stateJson ?: continue
             val state = objectMapper.readValue(json, GameState::class.java)
 
