@@ -9,4 +9,5 @@ interface GamePlayService {
     fun roll(gameId: Long, me: User): GameState
     fun keep(gameId: Long, me: User, slots: List<Int>): GameState
     fun bank(gameId: Long, me: User): GameState
+    fun forfeit(gameId: Long, me: User): GameState
 }

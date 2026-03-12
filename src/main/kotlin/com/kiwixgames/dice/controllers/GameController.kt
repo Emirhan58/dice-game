@@ -69,6 +69,17 @@ class GameController(
         return ResponseEntity.ok(response)
     }
 
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/{gameId}/forfeit")
+    fun forfeit(@PathVariable gameId: Long): ResponseEntity<GameStateResponse> {
+        val me: User = currentUserProvider.getUser()
+        val game: Game = gameRepository.findById(gameId).orElseThrow { IllegalArgumentException("Game not found") }
+        val state: GameState = gamePlayService.forfeit(gameId, me)
+        val mySeat: Int = resolveSeat(game, me)
+        val response: GameStateResponse = GameMapper.toDto(game, state, mySeat)
+        return ResponseEntity.ok(response)
+    }
+
     private fun resolveSeat(game: Game, me: User): Int {
         val myId = me.id ?: error("user id null")
         return when (myId) {

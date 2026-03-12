@@ -233,6 +233,30 @@ class GamePlayServiceImpl(
         return saveState(game, next)
     }
 
+    @Transactional
+    override fun forfeit(gameId: Long, me: User): GameState {
+        val game = gameRepository.findById(gameId).orElseThrow {
+            EntityNotFoundException("Game not found: $gameId")
+        }
+        val seat = requirePlayer(game, me)
+        val state = readState(game)
+
+        ensureInProgress(state)
+
+        val winnerSeat = 1 - seat
+        val finished = finalizeGame(game, state, winnerSeat)
+
+        publisher.publish(gameId, GameEvent(
+            type = "FORFEIT",
+            gameId = gameId,
+            tableId = game.table.id!!,
+            bySeat = seat,
+            payload = mapOf("winnerSeat" to winnerSeat, "reason" to "VOLUNTARY")
+        ))
+
+        return saveState(game, finished)
+    }
+
     // ---------------- helpers ----------------
 
     private fun rollDie(): Int = rng.nextInt(6) + 1
