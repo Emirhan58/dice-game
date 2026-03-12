@@ -8,6 +8,7 @@ import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.services.GameService
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.security.SecureRandom
 
 @Service
 class GameServiceImpl(
@@ -15,12 +16,15 @@ class GameServiceImpl(
     private val objectMapper: ObjectMapper
 ) : GameService {
 
+    private val rng = SecureRandom()
+
     @Transactional
     override fun startGame(table: GameTable): Game {
         val existing = gameRepository.findByTableId(table.id!!)
         if (existing != null) return existing
 
-        val initial = GameState(targetScore = table.targetScore)
+        val firstSeat = rng.nextInt(2)
+        val initial = GameState(targetScore = table.targetScore, activeSeat = firstSeat)
 
         return gameRepository.save(
             Game(

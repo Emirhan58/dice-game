@@ -133,6 +133,15 @@ class GamePlayServiceImpl(
         val gained = Kcd2ScoringMax.scoreMax(keptValues)
         if (gained <= 0) error("Selected dice do not form a valid scoring combination")
 
+        // Ensure every kept die contributes to scoring (no wasted dice)
+        for (i in slots.indices) {
+            val without = keptValues.toMutableList().apply { removeAt(i) }
+            if (Kcd2ScoringMax.scoreMax(without) == gained) {
+                val dieValue = keptValues[i]
+                error("Die with value $dieValue at slot ${slots[i]} does not contribute to any scoring combination")
+            }
+        }
+
         val newRemaining = state.remainingSlots.filter { it !in slots }.toIntArray()
         val newTurnScore = state.turnScore + gained
 
@@ -289,7 +298,7 @@ class GamePlayServiceImpl(
             activeSeat = nextSeat,
             turnScore = 0,
             remainingSlots = intArrayOf(0, 1, 2, 3, 4, 5),
-            lastRoll = null,
+            lastRoll = if (bust) state.lastRoll else null,
             phase = TurnPhase.MUST_ROLL
         )
     }

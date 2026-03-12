@@ -24,6 +24,12 @@ class JwtAuthenticationFilter(
 
     private val log = LoggerFactory.getLogger(JwtAuthenticationFilter::class.java)
 
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean {
+        val path = request.requestURI
+        return path.startsWith("/api/v1/auth/refresh")
+                || path.startsWith("/api/v1/auth/reset-password")
+    }
+
     @Throws(ServletException::class, IOException::class)
     override fun doFilterInternal(
         request: HttpServletRequest,
@@ -46,18 +52,14 @@ class JwtAuthenticationFilter(
                 return
             }
 
-            val expectedTokenType: TokenType = determineExpectedTokenType(request)
+            val userDetails: UserDetails = authenticationService.validateTokenByType(token, TokenType.ACCESS)
 
-            val userDetails: UserDetails = authenticationService.validateTokenByType(token, expectedTokenType)
-
-            if (expectedTokenType == TokenType.ACCESS) {
-                val authentication = UsernamePasswordAuthenticationToken(
-                    userDetails,
-                    null,
-                    userDetails.authorities
-                )
-                SecurityContextHolder.getContext().authentication = authentication
-            }
+            val authentication = UsernamePasswordAuthenticationToken(
+                userDetails,
+                null,
+                userDetails.authorities
+            )
+            SecurityContextHolder.getContext().authentication = authentication
 
             if (userDetails is BlogUserDetails) {
                 request.setAttribute("userId", userDetails.getId())
@@ -90,15 +92,6 @@ class JwtAuthenticationFilter(
         return if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
             bearerToken.substring(7)
         } else null
-    }
-
-    private fun determineExpectedTokenType(request: HttpServletRequest): TokenType {
-        val path = request.requestURI
-        return when {
-            path.startsWith("/api/v1/auth/refresh") -> TokenType.REFRESH
-            path.startsWith("/api/v1/auth/reset-password") -> TokenType.RESET
-            else -> TokenType.ACCESS
-        }
     }
 
     private fun sendJsonErrorResponse(
