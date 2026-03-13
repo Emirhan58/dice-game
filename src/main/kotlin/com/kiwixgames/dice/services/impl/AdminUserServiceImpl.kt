@@ -7,13 +7,17 @@ import com.kiwixgames.dice.domain.dtos.admin.AdminUserResponse
 import com.kiwixgames.dice.domain.entities.User
 import com.kiwixgames.dice.domain.entities.Wallet
 import com.kiwixgames.dice.domain.entities.WalletTxn
+import com.kiwixgames.dice.domain.enums.GameStatus
 import com.kiwixgames.dice.domain.enums.WalletTxnType
 import com.kiwixgames.dice.mappers.AdminUserMapper
+import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.repositories.UserRepository
 import com.kiwixgames.dice.repositories.WalletRepository
 import com.kiwixgames.dice.repositories.WalletTxnRepository
 import com.kiwixgames.dice.services.AdminUserService
+import com.kiwixgames.dice.services.GamePlayService
 import jakarta.persistence.EntityNotFoundException
+import org.slf4j.LoggerFactory
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -25,8 +29,12 @@ class AdminUserServiceImpl(
     private val userRepository: UserRepository,
     private val walletRepository: WalletRepository,
     private val walletTxnRepository: WalletTxnRepository,
-    private val passwordEncoder: PasswordEncoder
+    private val passwordEncoder: PasswordEncoder,
+    private val gameRepository: GameRepository,
+    private val gamePlayService: GamePlayService
 ) : AdminUserService {
+
+    private val log = LoggerFactory.getLogger(AdminUserServiceImpl::class.java)
 
     @Transactional(readOnly = true)
     override fun list(search: String?, pageable: Pageable): Page<AdminUserResponse> {
@@ -100,9 +108,16 @@ class AdminUserServiceImpl(
         req.firstName?.let { user.firstName = it }
         req.lastName?.let { user.lastName = it }
         req.role?.let { user.role = it }
+
+        val wasActive = user.isActive
         req.isActive?.let { user.isActive = it }
 
         userRepository.save(user)
+
+        if (wasActive && !user.isActive) {
+            forfeitActiveGames(user)
+        }
+
         return toResponse(user)
     }
 
@@ -111,6 +126,7 @@ class AdminUserServiceImpl(
         val user = findUser(id)
         user.isActive = false
         userRepository.save(user)
+        forfeitActiveGames(user)
     }
 
     @Transactional(readOnly = true)
@@ -168,6 +184,18 @@ class AdminUserServiceImpl(
         )
 
         return toResponse(user)
+    }
+
+    private fun forfeitActiveGames(user: User) {
+        val activeGames = gameRepository.findAllByStatusAndUserId(GameStatus.IN_PROGRESS, user.id!!)
+        for (game in activeGames) {
+            try {
+                gamePlayService.forfeit(game.id!!, user, "DEACTIVATED")
+                log.info("Forfeited gameId=${game.id} for deactivated userId=${user.id}")
+            } catch (e: Exception) {
+                log.error("Failed to forfeit gameId=${game.id} for deactivated userId=${user.id}: ${e.message}", e)
+            }
+        }
     }
 
     private fun findUser(id: Long): User =

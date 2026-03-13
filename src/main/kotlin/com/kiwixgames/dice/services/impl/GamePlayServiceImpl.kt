@@ -234,7 +234,7 @@ class GamePlayServiceImpl(
     }
 
     @Transactional
-    override fun forfeit(gameId: Long, me: User): GameState {
+    override fun forfeit(gameId: Long, me: User, reason: String): GameState {
         val game = gameRepository.findById(gameId).orElseThrow {
             EntityNotFoundException("Game not found: $gameId")
         }
@@ -251,7 +251,7 @@ class GamePlayServiceImpl(
             gameId = gameId,
             tableId = game.table.id!!,
             bySeat = seat,
-            payload = mapOf("winnerSeat" to winnerSeat, "reason" to "VOLUNTARY")
+            payload = mapOf("winnerSeat" to winnerSeat, "loserSeat" to seat, "reason" to reason)
         ))
 
         return saveState(game, finished)

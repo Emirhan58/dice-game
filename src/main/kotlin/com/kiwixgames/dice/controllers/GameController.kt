@@ -9,6 +9,7 @@ import com.kiwixgames.dice.mappers.GameMapper
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.security.CurrentUserProvider
 import com.kiwixgames.dice.services.GamePlayService
+import com.kiwixgames.dice.services.PlayerPresenceService
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.security.access.prepost.PreAuthorize
@@ -19,7 +20,8 @@ import org.springframework.web.bind.annotation.*
 class GameController(
     private val gameRepository: GameRepository,
     private val gamePlayService: GamePlayService,
-    private val currentUserProvider: CurrentUserProvider
+    private val currentUserProvider: CurrentUserProvider,
+    private val playerPresenceService: PlayerPresenceService
 ) {
 
     @PreAuthorize("isAuthenticated()")
@@ -78,6 +80,14 @@ class GameController(
         val mySeat: Int = resolveSeat(game, me)
         val response: GameStateResponse = GameMapper.toDto(game, state, mySeat)
         return ResponseEntity.ok(response)
+    }
+
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/{gameId}/ping")
+    fun ping(@PathVariable gameId: Long): ResponseEntity<Void> {
+        val me: User = currentUserProvider.getUser()
+        playerPresenceService.ping(gameId, me.id!!)
+        return ResponseEntity.ok().build()
     }
 
     private fun resolveSeat(game: Game, me: User): Int {

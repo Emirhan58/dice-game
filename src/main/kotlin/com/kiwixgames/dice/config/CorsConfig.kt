@@ -14,12 +14,7 @@ class CorsConfig {
         val configuration = CorsConfiguration()
 
         // Frontend URL'lerini izin ver
-        configuration.allowedOrigins = listOf(
-            "http://localhost:3000",
-            "http://localhost:3001",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:3001"
-        )
+        configuration.allowedOriginPatterns = listOf("*")
 
         // Tüm HTTP metodlarına izin ver
         configuration.allowedMethods = listOf(
