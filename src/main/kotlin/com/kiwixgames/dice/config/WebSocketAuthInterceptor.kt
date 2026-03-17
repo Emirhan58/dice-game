@@ -4,9 +4,10 @@ import com.kiwixgames.dice.domain.enums.TokenType
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.security.BlogUserDetails
 import com.kiwixgames.dice.services.AuthenticationService
-import com.kiwixgames.dice.listeners.WebSocketDisconnectListener
 import com.kiwixgames.dice.services.GameSessionRegistry
+import com.kiwixgames.dice.services.PlayerPresenceService
 import com.kiwixgames.dice.services.TokenBlacklistService
+import org.slf4j.LoggerFactory
 import org.springframework.messaging.Message
 import org.springframework.messaging.MessageChannel
 import org.springframework.messaging.simp.stomp.StompCommand
@@ -22,10 +23,10 @@ class WebSocketAuthInterceptor(
     private val tokenBlacklistService: TokenBlacklistService,
     private val gameRepository: GameRepository,
     private val gameSessionRegistry: GameSessionRegistry,
-    private val disconnectListener: WebSocketDisconnectListener
+    private val playerPresenceService: PlayerPresenceService
 ) : ChannelInterceptor {
 
-    private val log = org.slf4j.LoggerFactory.getLogger(WebSocketAuthInterceptor::class.java)
+    private val log = LoggerFactory.getLogger(WebSocketAuthInterceptor::class.java)
 
     private val gameTopicPattern = Regex("^/topic/games/(\\d+)$")
 
@@ -33,10 +34,7 @@ class WebSocketAuthInterceptor(
         val accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor::class.java)
             ?: return message
 
-        // Heartbeat frames have no command — skip auth
         val command = accessor.command ?: return message
-
-        log.info("STOMP command received: $command, sessionId=${accessor.sessionId}")
 
         when (command) {
             StompCommand.CONNECT -> handleConnect(accessor)
@@ -98,7 +96,7 @@ class WebSocketAuthInterceptor(
         val sessionId = accessor.sessionId
         if (sessionId != null && userId != null) {
             gameSessionRegistry.connect(sessionId, userId, gameId)
-            disconnectListener.cancelPendingForfeit(userId)
+            playerPresenceService.clearDisconnect(gameId, userId)
             log.info("Session registered: sessionId=$sessionId, userId=$userId, gameId=$gameId")
         } else {
             log.warn("Session NOT registered: sessionId=$sessionId, userId=$userId, gameId=$gameId")
@@ -106,6 +104,4 @@ class WebSocketAuthInterceptor(
     }
 
     // DISCONNECT is handled by WebSocketDisconnectListener via SessionDisconnectEvent.
-    // Do NOT call gameSessionRegistry.disconnect() here — it would remove the mapping
-    // before the listener gets a chance to start the grace period timer.
 }

@@ -1,9 +1,11 @@
 package com.kiwixgames.dice.jobs
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.kiwixgames.dice.domain.dtos.game.GameEvent
 import com.kiwixgames.dice.domain.enums.GameStatus
 import com.kiwixgames.dice.domain.enums.TableStatus
 import com.kiwixgames.dice.domain.enums.WagerLockStatus
+import com.kiwixgames.dice.domain.model.game.GameState
 import com.kiwixgames.dice.repositories.GameRepository
 import com.kiwixgames.dice.repositories.TableRepository
 import com.kiwixgames.dice.repositories.UserRepository
@@ -12,13 +14,12 @@ import com.kiwixgames.dice.services.GameEventPublisher
 import com.kiwixgames.dice.services.GamePlayService
 import com.kiwixgames.dice.services.PlayerPresenceService
 import com.kiwixgames.dice.services.WalletService
-import com.kiwixgames.dice.domain.dtos.game.GameEvent
-import com.kiwixgames.dice.domain.model.game.GameState
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionTemplate
 import java.time.LocalDateTime
+import java.util.concurrent.ConcurrentHashMap
 
 @Component
 class GameTimeoutJob(
@@ -36,40 +37,103 @@ class GameTimeoutJob(
     private val log = LoggerFactory.getLogger(GameTimeoutJob::class.java)
 
     private val gameTimeoutMs = 6_000_000L           // 100 minutes — absolute game timeout
-    private val presenceTimeoutMs = 60_000L           // 60 seconds — player disconnect timeout
+    private val presenceTimeoutMs = 60_000L           // 60 seconds — player ping timeout
+    private val disconnectGraceMs = 30_000L           // 30 seconds — WebSocket disconnect grace period
     private val waitingTimeoutMs = 1_800_000L         // 30 minutes — waiting table timeout
 
+    /** Tracks which disconnects we've already notified about (gameId:userId) */
+    private val notifiedDisconnects = ConcurrentHashMap.newKeySet<String>()
+
     /**
-     * Check for absent players every 5 seconds.
-     * If a player hasn't pinged for 60 seconds, they forfeit.
+     * Unified connectivity check — handles both WebSocket disconnects (grace period)
+     * and ping-based absence detection in a single pass.
+     *
+     * Priority: WS disconnect > ping timeout (a disconnected player also stops pinging,
+     * so we skip ping checks for players already tracked by disconnect grace).
      */
     @Scheduled(fixedDelay = 5_000L)
-    fun checkPlayerPresence() {
+    fun checkPlayerConnectivity() {
         val games = gameRepository.findAllByStatusWithPlayers(GameStatus.IN_PROGRESS)
 
         for (g in games) {
             val table = g.table
             val seat0Id = table.seat0?.id ?: continue
             val seat1Id = table.seat1?.id ?: continue
+            val gameId = g.id!!
 
-            val seat0Absent = playerPresenceService.isAbsent(g.id!!, seat0Id, presenceTimeoutMs)
-            val seat1Absent = playerPresenceService.isAbsent(g.id!!, seat1Id, presenceTimeoutMs)
+            val players = listOf(seat0Id to 0, seat1Id to 1)
 
-            val absentUserId = when {
-                seat0Absent && !seat1Absent -> seat0Id
-                seat1Absent && !seat0Absent -> seat1Id
-                else -> continue  // both present, or both absent (don't forfeit anyone)
+            // --- Phase 1: Disconnect events (notify + reconnect) ---
+            for ((userId, seat) in players) {
+                val key = "$gameId:$userId"
+
+                if (playerPresenceService.isDisconnected(gameId, userId)) {
+                    if (notifiedDisconnects.add(key)) {
+                        publisher.publish(gameId, GameEvent(
+                            type = "PLAYER_DISCONNECTED",
+                            gameId = gameId,
+                            tableId = table.id!!,
+                            bySeat = seat,
+                            payload = mapOf("seat" to seat, "graceMs" to disconnectGraceMs)
+                        ))
+                        log.info("PLAYER_DISCONNECTED published: gameId=$gameId, userId=$userId")
+                    }
+                } else if (notifiedDisconnects.remove(key)) {
+                    publisher.publish(gameId, GameEvent(
+                        type = "PLAYER_RECONNECTED",
+                        gameId = gameId,
+                        tableId = table.id!!,
+                        bySeat = seat,
+                        payload = mapOf("seat" to seat)
+                    ))
+                    log.info("PLAYER_RECONNECTED published: gameId=$gameId, userId=$userId")
+                }
             }
 
-            try {
-                val user = userRepository.findById(absentUserId).orElse(null) ?: continue
-                gamePlayService.forfeit(g.id!!, user, "DISCONNECT")
-                playerPresenceService.remove(g.id!!)
-                log.info("Player userId=$absentUserId forfeited gameId=${g.id} due to absence (no ping for ${presenceTimeoutMs / 1000}s)")
-            } catch (e: Exception) {
-                log.error("Failed to forfeit gameId=${g.id} for absent userId=$absentUserId: ${e.message}", e)
+            // --- Phase 2: Determine if someone should be forfeited ---
+            val forfeitUserId = findForfeitCandidate(gameId, seat0Id, seat1Id)
+            if (forfeitUserId != null) {
+                try {
+                    val user = userRepository.findById(forfeitUserId).orElse(null) ?: continue
+                    val reason = if (playerPresenceService.isDisconnected(gameId, forfeitUserId)) "DISCONNECT" else "PING_TIMEOUT"
+                    gamePlayService.forfeit(gameId, user, reason)
+                    cleanupGame(gameId)
+                    log.info("Player userId=$forfeitUserId forfeited gameId=$gameId (reason=$reason)")
+                } catch (e: Exception) {
+                    log.error("Failed to forfeit gameId=$gameId for userId=$forfeitUserId: ${e.message}", e)
+                }
             }
         }
+    }
+
+    /**
+     * Returns the userId that should be forfeited, or null.
+     * Disconnect grace (30s) is checked first, then ping absence (60s).
+     * Only forfeits if exactly one player is offline.
+     */
+    private fun findForfeitCandidate(gameId: Long, seat0Id: Long, seat1Id: Long): Long? {
+        val seat0Dc = playerPresenceService.isDisconnectedBeyondGrace(gameId, seat0Id, disconnectGraceMs)
+        val seat1Dc = playerPresenceService.isDisconnectedBeyondGrace(gameId, seat1Id, disconnectGraceMs)
+
+        // Disconnect grace expired — takes priority
+        if (seat0Dc && !seat1Dc) return seat0Id
+        if (seat1Dc && !seat0Dc) return seat1Id
+        if (seat0Dc && seat1Dc) return null // both disconnected, don't forfeit
+
+        // Skip ping check for players already in disconnect grace (they'll stop pinging too)
+        val seat0Absent = !playerPresenceService.isDisconnected(gameId, seat0Id)
+                && playerPresenceService.isAbsent(gameId, seat0Id, presenceTimeoutMs)
+        val seat1Absent = !playerPresenceService.isDisconnected(gameId, seat1Id)
+                && playerPresenceService.isAbsent(gameId, seat1Id, presenceTimeoutMs)
+
+        if (seat0Absent && !seat1Absent) return seat0Id
+        if (seat1Absent && !seat0Absent) return seat1Id
+        return null
+    }
+
+    private fun cleanupGame(gameId: Long) {
+        playerPresenceService.remove(gameId)
+        notifiedDisconnects.removeIf { it.startsWith("$gameId:") }
     }
 
     /**
@@ -116,7 +180,7 @@ class GameTimeoutJob(
                         payload = mapOf("winnerSeat" to winnerSeat, "loserSeat" to loserSeat, "reason" to "TIMEOUT")
                     ))
 
-                    playerPresenceService.remove(game.id!!)
+                    cleanupGame(game.id!!)
                 }
             } catch (e: Exception) {
                 log.error("Failed to process game timeout for gameId=${g.id}: ${e.message}", e)

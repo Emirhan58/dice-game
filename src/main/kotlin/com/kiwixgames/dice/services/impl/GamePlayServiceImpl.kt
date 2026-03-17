@@ -244,7 +244,7 @@ class GamePlayServiceImpl(
         ensureInProgress(state)
 
         val winnerSeat = 1 - seat
-        val finished = finalizeGame(game, state, winnerSeat)
+        val finished = finalizeGame(game, state, winnerSeat, publishFinished = false)
 
         publisher.publish(gameId, GameEvent(
             type = "FORFEIT",
@@ -328,7 +328,12 @@ class GamePlayServiceImpl(
         )
     }
 
-    private fun finalizeGame(game: Game, state: GameState, winnerSeat: Int): GameState {
+    private fun finalizeGame(
+        game: Game,
+        state: GameState,
+        winnerSeat: Int,
+        publishFinished: Boolean = true
+    ): GameState {
         game.winnerSeat = winnerSeat
         game.finishedAt = LocalDateTime.now()
         game.status = GameStatus.FINISHED
@@ -339,13 +344,15 @@ class GamePlayServiceImpl(
 
         walletService.payoutOnce(table.id!!, winnerSeat)
 
-        publisher.publish(game.id!!, GameEvent(
-            type = "FINISHED",
-            gameId = game.id!!,
-            tableId = table.id!!,
-            bySeat = winnerSeat,
-            payload = mapOf("winnerSeat" to winnerSeat)
-        ))
+        if (publishFinished) {
+            publisher.publish(game.id!!, GameEvent(
+                type = "FINISHED",
+                gameId = game.id!!,
+                tableId = table.id!!,
+                bySeat = winnerSeat,
+                payload = mapOf("winnerSeat" to winnerSeat)
+            ))
+        }
 
         return state.copy(status = GameStatus.FINISHED)
     }
