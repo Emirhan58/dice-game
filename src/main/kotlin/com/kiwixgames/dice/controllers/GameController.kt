@@ -86,6 +86,8 @@ class GameController(
     @PostMapping("/{gameId}/ping")
     fun ping(@PathVariable gameId: Long): ResponseEntity<Void> {
         val me: User = currentUserProvider.getUser()
+        val game: Game = gameRepository.findById(gameId).orElseThrow { IllegalArgumentException("Game not found") }
+        resolveSeat(game, me) // throws if not a player
         playerPresenceService.ping(gameId, me.id!!)
         return ResponseEntity.ok().build()
     }
